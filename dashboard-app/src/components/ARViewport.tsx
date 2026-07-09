@@ -27,8 +27,35 @@ export const ARViewport: React.FC<ARViewportProps> = ({
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [streamActive, setStreamActive] = useState(false);
-  const [simulationMode, setSimulationMode] = useState<string>('simulation'); // 'webcam' or 'simulation'
+  const [simulationMode, setSimulationMode] = useState<string>('simulation'); // 'webcam', 'simulation' or 'sandbox'
   
+  // Sandbox states
+  const [sandboxObstacles, setSandboxObstacles] = useState<Obstacle[]>([
+    {
+      label: 'Pedestrian (Sandbox)',
+      x: 380,
+      y: 190,
+      width: 45,
+      height: 120,
+      distance: 4.8,
+      hazardLevel: 'medium',
+      direction: 'center'
+    },
+    {
+      label: 'Traffic Cone (Sandbox)',
+      x: 210,
+      y: 260,
+      width: 40,
+      height: 60,
+      distance: 2.5,
+      hazardLevel: 'low',
+      direction: 'left'
+    }
+  ]);
+  const [selectedObstacleType, setSelectedObstacleType] = useState<string>('Pedestrian');
+  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+  const [dragOffset, setDragOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+
   // Track simulation states
   const simFrameRef = useRef(0);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -107,6 +134,157 @@ export const ARViewport: React.FC<ARViewportProps> = ({
     osc.stop(ctx.currentTime + 0.16);
   };
 
+  // Sandbox Mouse/Touch Event Handlers
+  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (simulationMode !== 'sandbox') return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const clickX = ((e.clientX - rect.left) / rect.width) * canvas.width;
+    const clickY = ((e.clientY - rect.top) / rect.height) * canvas.height;
+
+    for (let i = sandboxObstacles.length - 1; i >= 0; i--) {
+      const o = sandboxObstacles[i];
+      if (clickX >= o.x && clickX <= o.x + o.width && clickY >= o.y && clickY <= o.y + o.height) {
+        setDraggedIndex(i);
+        setDragOffset({ x: clickX - o.x, y: clickY - o.y });
+        initAudio();
+        return;
+      }
+    }
+  };
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (simulationMode !== 'sandbox' || draggedIndex === null) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const clickX = ((e.clientX - rect.left) / rect.width) * canvas.width;
+    const clickY = ((e.clientY - rect.top) / rect.height) * canvas.height;
+
+    const o = sandboxObstacles[draggedIndex];
+    const newX = Math.max(0, Math.min(canvas.width - o.width, clickX - dragOffset.x));
+    const newY = Math.max(canvas.height * 0.1, Math.min(canvas.height - o.height, clickY - dragOffset.y));
+
+    const horizon = canvas.height * 0.45;
+    const heightSpan = canvas.height - horizon;
+    const normY = Math.max(0.01, Math.min(1.0, (newY + o.height - horizon) / heightSpan));
+    const distance = parseFloat((0.5 + 14.5 * (1.0 - normY)).toFixed(1));
+
+    const centerPercent = (newX + o.width / 2) / canvas.width;
+    let direction: 'left' | 'center' | 'right' = 'center';
+    if (centerPercent < 0.4) {
+      direction = 'left';
+    } else if (centerPercent > 0.6) {
+      direction = 'right';
+    }
+
+    let hazardLevel: 'low' | 'medium' | 'high' = 'low';
+    if (distance < 2.0) {
+      hazardLevel = 'high';
+    } else if (distance < 5.0) {
+      hazardLevel = 'medium';
+    }
+
+    setSandboxObstacles(prev => prev.map((item, idx) => {
+      if (idx === draggedIndex) {
+        return {
+          ...item,
+          x: newX,
+          y: newY,
+          distance,
+          direction,
+          hazardLevel
+        };
+      }
+      return item;
+    }));
+  };
+
+  const handleMouseUp = () => {
+    setDraggedIndex(null);
+  };
+
+  const handleDoubleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (simulationMode !== 'sandbox') return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const clickX = ((e.clientX - rect.left) / rect.width) * canvas.width;
+    const clickY = ((e.clientY - rect.top) / rect.height) * canvas.height;
+
+    setSandboxObstacles(prev => prev.filter(item => {
+      const hit = clickX >= item.x && clickX <= item.x + item.width && clickY >= item.y && clickY <= item.y + item.height;
+      return !hit;
+    }));
+  };
+
+  const handleAddObstacle = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    let width = 60;
+    let height = 80;
+    let label = selectedObstacleType;
+    let hazardLevel: 'low' | 'medium' | 'high' = 'medium';
+
+    if (selectedObstacleType === 'Pedestrian') {
+      width = 45;
+      height = 120;
+      hazardLevel = 'high';
+    } else if (selectedObstacleType === 'Traffic Cone') {
+      width = 40;
+      height = 60;
+      hazardLevel = 'low';
+    } else if (selectedObstacleType === 'Stairs') {
+      width = 120;
+      height = 90;
+      hazardLevel = 'high';
+    } else if (selectedObstacleType === 'Office Chair') {
+      width = 60;
+      height = 80;
+      hazardLevel = 'medium';
+    } else if (selectedObstacleType === 'Vehicle') {
+      width = 140;
+      height = 80;
+      hazardLevel = 'high';
+    } else if (selectedObstacleType === 'Pothole') {
+      width = 90;
+      height = 40;
+      hazardLevel = 'high';
+    }
+
+    const x = canvas.width / 2 - width / 2 + (Math.random() - 0.5) * 120;
+    const y = canvas.height * 0.5 + (Math.random() - 0.5) * 60;
+
+    const newObstacle: Obstacle = {
+      label,
+      x: Math.max(0, Math.min(canvas.width - width, x)),
+      y: Math.max(canvas.height * 0.15, Math.min(canvas.height - height, y)),
+      width,
+      height,
+      distance: 3.5,
+      hazardLevel,
+      direction: 'center'
+    };
+
+    const horizon = canvas.height * 0.45;
+    const heightSpan = canvas.height - horizon;
+    const normY = Math.max(0.01, Math.min(1.0, (newObstacle.y + newObstacle.height - horizon) / heightSpan));
+    newObstacle.distance = parseFloat((0.5 + 14.5 * (1.0 - normY)).toFixed(1));
+
+    const centerPercent = (newObstacle.x + newObstacle.width / 2) / canvas.width;
+    if (centerPercent < 0.4) {
+      newObstacle.direction = 'left';
+    } else if (centerPercent > 0.6) {
+      newObstacle.direction = 'right';
+    } else {
+      newObstacle.direction = 'center';
+    }
+
+    setSandboxObstacles(prev => [...prev, newObstacle]);
+  };
+
   // Run the render and CV pipeline loops
   useEffect(() => {
     let animationId: number;
@@ -132,13 +310,37 @@ export const ARViewport: React.FC<ARViewportProps> = ({
       }
 
       // Generate simulated obstacles based on active route and frame index
-      const obstacles = getObstaclesForRoute(activeRoute, frameNum, width, height);
+      const obstacles = simulationMode === 'sandbox'
+        ? sandboxObstacles
+        : getObstaclesForRoute(activeRoute, frameNum, width, height);
+
+      // Dynamic path avoidance steering calculation
+      let pathShiftX = 0;
+      if (simulationMode === 'sandbox') {
+        obstacles.forEach(o => {
+          const obsCenterX = o.x + o.width / 2;
+          const obsCenterY = o.y + o.height;
+          const horizon = height * 0.45;
+          if (obsCenterY > horizon && obsCenterY <= height) {
+            const pathCenterX = width / 2;
+            const diffX = obsCenterX - pathCenterX;
+            const distanceX = Math.abs(diffX);
+            const threshold = width * 0.22;
+            if (distanceX < threshold) {
+              const force = (1.0 - distanceX / threshold) * (width * 0.15);
+              const directionSign = diffX > 0 ? -1 : 1;
+              pathShiftX += directionSign * force;
+            }
+          }
+        });
+        pathShiftX = Math.max(-width * 0.22, Math.min(width * 0.22, pathShiftX));
+      }
 
       // Perform frame-skipping optimizations (skip complex AI calculations every N frames)
       const shouldRunInference = frameNum % frameSkipRate === 0;
 
       // Draw bounding boxes, depth labels, and paths
-      drawAROverlays(ctx, width, height, obstacles, frameNum, shouldRunInference);
+      drawAROverlays(ctx, width, height, obstacles, frameNum, shouldRunInference, pathShiftX);
 
       // Speak alerts if obstacle gets dangerously close (throttled every 4 seconds)
       const dangerousObstacle = obstacles.find(o => o.distance < 1.8 && o.hazardLevel === 'high');
@@ -147,10 +349,18 @@ export const ARViewport: React.FC<ARViewportProps> = ({
         lastAlertTime = now;
         onNavigateAlert(`Warning. ${dangerousObstacle.label} detected ${dangerousObstacle.distance} meters ahead ${dangerousObstacle.direction}. Veer away.`);
         playSpatialPing(dangerousObstacle.distance, dangerousObstacle.direction);
-      } else if (frameNum % 30 === 0 && obstacles.length > 0) {
-        // Play ambient sonar tick for closest object
+      } else if (obstacles.length > 0) {
+        // Dynamic Sonar warning frequency
         const closest = obstacles.reduce((min, o) => o.distance < min.distance ? o : min, obstacles[0]);
-        playSpatialPing(closest.distance, closest.direction);
+        let pingInterval = 40;
+        if (closest.distance < 1.5) {
+          pingInterval = 10;
+        } else if (closest.distance < 3.0) {
+          pingInterval = 20;
+        }
+        if (frameNum % pingInterval === 0) {
+          playSpatialPing(closest.distance, closest.direction);
+        }
       }
 
       animationId = requestAnimationFrame(draw);
@@ -158,7 +368,7 @@ export const ARViewport: React.FC<ARViewportProps> = ({
 
     animationId = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(animationId);
-  }, [simulationMode, streamActive, activeRoute, frameSkipRate, onNavigateAlert]);
+  }, [simulationMode, streamActive, activeRoute, frameSkipRate, onNavigateAlert, sandboxObstacles]);
 
   // Renders a stylized vector outline grid representing the physical environment 3D scene
   const drawSimulatedBackground = (ctx: CanvasRenderingContext2D, w: number, h: number, frame: number) => {
@@ -311,24 +521,37 @@ export const ARViewport: React.FC<ARViewportProps> = ({
     h: number,
     obstacles: Obstacle[],
     frame: number,
-    runInference: boolean
+    runInference: boolean,
+    pathShiftX: number
   ) => {
-    // 1. Draw Ground Safe Walking Path Segmentation
+    const horizon = h * 0.45;
+
+    // 1. Draw Ground Safe Walking Path Segmentation (Bending/Avoiding obstacles)
     ctx.fillStyle = lowVisionTheme ? 'rgba(0, 255, 0, 0.4)' : 'rgba(16, 185, 129, 0.22)';
     ctx.strokeStyle = lowVisionTheme ? '#00ff00' : '#10b981';
     ctx.lineWidth = 3;
 
     ctx.beginPath();
-    // Perspective triangular polygon
-    ctx.moveTo(w * 0.42, h * 0.45);
-    ctx.lineTo(w * 0.58, h * 0.45);
-    ctx.lineTo(w * 0.85, h);
-    ctx.lineTo(w * 0.15, h);
+    // Bottom-Left
+    ctx.moveTo(w * 0.15, h);
+    
+    // Left boundary curve to Top-Left
+    const ctrlLeftX = w * 0.285 + pathShiftX;
+    const ctrlY = (h + horizon) / 2;
+    ctx.quadraticCurveTo(ctrlLeftX, ctrlY, w * 0.42 + pathShiftX * 0.3, horizon);
+    
+    // Top line to Top-Right
+    ctx.lineTo(w * 0.58 + pathShiftX * 0.3, horizon);
+    
+    // Right boundary curve back to Bottom-Right
+    const ctrlRightX = w * 0.715 + pathShiftX;
+    ctx.quadraticCurveTo(ctrlRightX, ctrlY, w * 0.85, h);
+    
     ctx.closePath();
     ctx.fill();
     ctx.stroke();
 
-    // 2. Draw 3D Guidance Chevrons (flowing forward)
+    // 2. Draw 3D Guidance Chevrons (flowing forward along the bent path)
     const chevronSpeed = (frame * 2.5) % 80;
     ctx.strokeStyle = lowVisionTheme ? '#ffff00' : '#06b6d4';
     ctx.lineWidth = 4;
@@ -337,17 +560,19 @@ export const ARViewport: React.FC<ARViewportProps> = ({
 
     for (let offset = 0; offset < 240; offset += 80) {
       const step = chevronSpeed + offset;
-      const scale = step / 240; // larger as it approaches screen bottom
+      const scale = step / 240;
       
-      const chevronY = (h * 0.45) + (scale * (h * 0.55));
+      const chevronY = (horizon) + (scale * (h - horizon));
       const chevronW = 40 * scale;
       const chevronH = 15 * scale;
-      const chevronX = w / 2;
+      
+      const t = scale;
+      const lineX = (1 - t) * (1 - t) * (w / 2 + pathShiftX * 0.3) + 2 * (1 - t) * t * (w / 2 + pathShiftX) + t * t * (w / 2);
 
       ctx.beginPath();
-      ctx.moveTo(chevronX - chevronW, chevronY + chevronH);
-      ctx.lineTo(chevronX, chevronY);
-      ctx.lineTo(chevronX + chevronW, chevronY + chevronH);
+      ctx.moveTo(lineX - chevronW, chevronY + chevronH);
+      ctx.lineTo(lineX, chevronY);
+      ctx.lineTo(lineX + chevronW, chevronY + chevronH);
       ctx.stroke();
     }
 
@@ -426,6 +651,13 @@ export const ARViewport: React.FC<ARViewportProps> = ({
             Virtual SIM
           </button>
           <button 
+            className={`tab-btn ${simulationMode === 'sandbox' ? 'active' : ''}`}
+            onClick={() => setSimulationMode('sandbox')}
+            style={{ padding: '0.2rem 0.6rem', fontSize: '0.75rem' }}
+          >
+            Interactive Sandbox
+          </button>
+          <button 
             className={`tab-btn ${simulationMode === 'webcam' ? 'active' : ''}`}
             onClick={() => setSimulationMode('webcam')}
             style={{ padding: '0.2rem 0.6rem', fontSize: '0.75rem' }}
@@ -445,7 +677,96 @@ export const ARViewport: React.FC<ARViewportProps> = ({
             style={{ display: 'none' }}
           />
         )}
-        <canvas ref={canvasRef} className="viewport-canvas" />
+        <canvas 
+          ref={canvasRef} 
+          className="viewport-canvas" 
+          onMouseDown={handleMouseDown}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseUp}
+          onDoubleClick={handleDoubleClick}
+          style={{ cursor: simulationMode === 'sandbox' ? 'pointer' : 'default' }}
+        />
+
+        {/* Sandbox Control HUD */}
+        {simulationMode === 'sandbox' && (
+          <div style={{
+            position: 'absolute',
+            top: '15px',
+            left: '15px',
+            background: 'rgba(15, 23, 42, 0.85)',
+            border: '1px solid var(--border-glass-bright)',
+            padding: '10px 14px',
+            borderRadius: '8px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '8px',
+            boxShadow: '0 4px 20px rgba(0,0,0,0.5)',
+            backdropFilter: 'blur(8px)',
+            width: '240px'
+          }}>
+            <span style={{ fontSize: '0.75rem', fontWeight: 800, color: 'var(--accent-cyan)', fontFamily: 'monospace' }}>
+              SANDBOX SIMULATION CONTROLS
+            </span>
+            <div style={{ display: 'flex', gap: '6px' }}>
+              <select 
+                value={selectedObstacleType}
+                onChange={(e) => setSelectedObstacleType(e.target.value)}
+                style={{
+                  flexGrow: 1,
+                  fontSize: '0.7rem',
+                  background: 'rgba(0,0,0,0.4)',
+                  color: '#fff',
+                  border: '1px solid var(--border-glass-bright)',
+                  borderRadius: '4px',
+                  padding: '2px 4px'
+                }}
+              >
+                <option value="Pedestrian">Pedestrian</option>
+                <option value="Traffic Cone">Traffic Cone</option>
+                <option value="Stairs">Stairs</option>
+                <option value="Office Chair">Office Chair</option>
+                <option value="Vehicle">Vehicle</option>
+                <option value="Pothole">Pothole</option>
+              </select>
+              <button 
+                onClick={handleAddObstacle}
+                style={{
+                  fontSize: '0.7rem',
+                  background: 'var(--accent-indigo)',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: '4px',
+                  padding: '4px 8px',
+                  cursor: 'pointer',
+                  fontWeight: 600
+                }}
+              >
+                + ADD
+              </button>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: '0.65rem', color: '#9ca3af', fontFamily: 'monospace' }}>
+                Double-click box to delete
+              </span>
+              <button 
+                onClick={() => setSandboxObstacles([])}
+                style={{
+                  fontSize: '0.65rem',
+                  background: 'rgba(239, 68, 68, 0.2)',
+                  color: '#ef4444',
+                  border: '1px solid rgba(239, 68, 68, 0.4)',
+                  borderRadius: '4px',
+                  padding: '2px 6px',
+                  cursor: 'pointer',
+                  fontFamily: 'monospace'
+                }}
+              >
+                Clear All
+              </button>
+            </div>
+          </div>
+        )}
         
         {/* Overlay HUD stats */}
         <div style={{
@@ -461,7 +782,7 @@ export const ARViewport: React.FC<ARViewportProps> = ({
           color: '#00ffcc',
           pointerEvents: 'none'
         }}>
-          FPS: 60 | HZ: 60.0 | MODE: {activeRoute.toUpperCase().replace('_', ' ')}
+          FPS: 60 | HZ: 60.0 | MODE: {simulationMode === 'sandbox' ? 'INTERACTIVE SANDBOX' : activeRoute.toUpperCase().replace('_', ' ')}
         </div>
       </div>
     </div>
