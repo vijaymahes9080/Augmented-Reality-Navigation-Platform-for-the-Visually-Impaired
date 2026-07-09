@@ -104,3 +104,9 @@ An affordable deployment package costing **~$107**:
 - CSI Camera Module V2
 - HC-SR04 Sonar Sensors
 - Bluetooth LE Beacon tags
+
+---
+
+## 4. License
+
+This project is licensed under the MIT License - see the [LICENSE](file:///d:/current%20project/Augmented%20Reality%20Navigation%20Platform%20for%20the%20Visually%20Impaired/LICENSE) file for details.
